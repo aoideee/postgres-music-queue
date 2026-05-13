@@ -1,0 +1,3 @@
+-- Filename: 000001_music_jobs.up.sql
+-- Author: Tysha Daniels
+-- Date: 2026-05-14
