@@ -260,3 +260,146 @@ ADD COLUMN public_id UUID NOT NULL UNIQUE DEFAULT uuidv4();
  pending
 
 */
+
+
+-- ============================================================================
+
+
+--Step 3 — status, progress
+
+ALTER TABLE music_jobs
+ADD COLUMN status   TEXT    NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'processing', 'done', 'failed')),
+ADD COLUMN progress INTEGER NOT NULL DEFAULT 0
+    CHECK (progress BETWEEN 0 AND 100);
+
+-- ============================================================================
+
+-- Questions and Answers
+
+-- 1. Why are status and progress real columns, not inside payload JSONB?
+-- ANSWER: They are real columns because they are frequently queried by the Go server to
+--         determine the status of the job, and adding indexes to real columns is more
+--         efficient than querying JSONB.
+
+-- 2. What happens if a buggy worker writes status = 'complet'?
+-- ANSWER: It would be rejected with an error message stating that the value violates the
+--         CHECK constraint.
+
+-- 3. Why does the CHECK constraint matter more than application validation?
+-- ANSWER: It ensures data integrity at the database level, preventing invalid data from 
+--         being inserted into the table, even if the application code is buggy.
+
+-- 4. Draw the state machine for a job lifecycle
+-- ANSWER: 
+
+/*
+
+  pending
+    ↓
+  processing
+    ↓
+  done
+
+*/
+
+-- ============================================================================
+
+-- Sample Data
+
+-- -- Claim the oldest pending job (UPDATE with subquery)
+-- UPDATE music_jobs
+-- SET status = 'processing'
+-- WHERE id = (
+--   SELECT id FROM music_jobs
+--   WHERE status = 'pending'
+--   ORDER BY created_at ASC
+--   LIMIT 1
+-- );
+
+-- -- Advance progress to 25%
+-- UPDATE music_jobs
+-- SET progress = 25
+-- WHERE status = 'processing';
+
+-- -- Advance progress to 50%
+-- UPDATE music_jobs
+-- SET progress = 50
+-- WHERE status = 'processing';
+
+-- -- Complete the job
+-- UPDATE music_jobs
+-- SET status = 'done', progress = 100
+-- WHERE status = 'processing';
+
+-- -- Invalid status (copy its error message)
+-- UPDATE music_jobs
+-- SET status = 'complet'
+-- WHERE id = (SELECT id FROM music_jobs ORDER BY created_at LIMIT 1);
+
+-- -- Invalid progress (copy its error message)
+-- UPDATE music_jobs
+-- SET progress = 150
+-- WHERE id = (SELECT id FROM music_jobs ORDER BY created_at LIMIT 1);
+
+-- Sample Data Error Messages:
+-- ERROR:  new row for relation "music_jobs" violates check constraint "music_jobs_status_check"
+-- DETAIL:  Failing row contains (019e2590-6b9f-7a98-88ef-582c58c9f516, {"genre": "garifuna", "artist": "Andy Palacio", "status": "pendi..., 2026-05-14 02:18:02.271318-06, e90e5867-0df2-4a21-8e8d-9075bbbebe20, complet, 100).
+-- ERROR:  new row for relation "music_jobs" violates check constraint "music_jobs_progress_check"
+-- DETAIL:  Failing row contains (019e2590-6b9f-7a98-88ef-582c58c9f516, {"genre": "garifuna", "artist": "Andy Palacio", "status": "pendi..., 2026-05-14 02:18:02.271318-06, e90e5867-0df2-4a21-8e8d-9075bbbebe20, done, 150).
+
+-- ============================================================================
+
+-- Verification Queries
+
+-- 1. What does the client see when polling a processing job?
+
+-- SELECT public_id, status, progress
+-- FROM music_jobs
+-- WHERE public_id = 'e90e5867-0df2-4a21-8e8d-9075bbbebe20';
+
+/*
+
+----------------------------------------------------------
+              public_id               | status | progress 
+--------------------------------------+--------+----------
+ e90e5867-0df2-4a21-8e8d-9075bbbebe20 | done   |      100
+
+*/
+
+-- ============================================================================
+
+-- 2. What query does the worker run to find its next job?
+
+-- SELECT id, payload
+-- FROM music_jobs
+-- WHERE status = 'pending'
+-- ORDER BY created_at ASC
+-- LIMIT 1;
+
+/*
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                  id                  |                                                            payload                                                            
+--------------------------------------+-------------------------------------------------------------------------------------------------------------------------------
+ 019e2590-6bac-7dcd-93d4-c40dd2028f56 | {"genre": "soca", "artist": "Supa G", "status": "pending", "filename": "supa_g_belize_riddim_final.mp3", "duration_sec": 187}
+
+*/
+
+-- ============================================================================
+
+-- 3. Show all jobs with their current state
+
+-- SELECT id, status, progress FROM music_jobs;
+
+/*
+----------------------------------------------------------
+                  id                  | status  | progress 
+--------------------------------------+---------+----------
+ 019e2590-6bac-7dcd-93d4-c40dd2028f56 | pending |        0
+ 019e2590-6baf-7096-ab4f-5fbbc773b73f | pending |        0
+ 019e2590-6b9f-7a98-88ef-582c58c9f516 | done    |      100
+
+*/
+
+
