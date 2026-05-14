@@ -48,6 +48,40 @@ CREATE TABLE IF NOT EXISTS music_jobs (
 --         This can lead to confusion if the database is accessed from different time zones.
 
 
+-- Sample Data
+
+-- INSERT INTO music_jobs (payload) VALUES (
+--   '{
+--     "filename": "andy_palacio_watina_live_mix.wav",
+--     "artist": "Andy Palacio",
+--     "genre": "garifuna",
+--     "duration_sec": 214,
+--     "status": "pending"
+--   }'::jsonb
+-- );
+
+-- INSERT INTO music_jobs (payload) VALUES (
+--   '{
+--     "filename": "supa_g_belize_riddim_final.mp3",
+--     "artist": "Supa G",
+--     "genre": "soca",
+--     "duration_sec": 187,
+--     "status": "pending"
+--   }'::jsonb
+-- );
+
+-- INSERT INTO music_jobs (payload) VALUES (
+--   '{
+--     "filename": "mohobub_flores_brukdown_session.wav",
+--     "artist": "Mohobub Flores",
+--     "genre": "brukdown",
+--     "duration_sec": 302,
+--     "status": "pending",
+--     "bpm": 96
+--   }'::jsonb
+-- );
+
+
 -- Verification Queries
 
 -- 1. Show all jobs ordered by creation time
