@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS music_jobs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- ============================================================================
 
 -- Questions & Answers
 
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS music_jobs (
 --         stores it exactly as provided. When retrieving it, it returns the same value without any conversion. 
 --         This can lead to confusion if the database is accessed from different time zones.
 
+-- ============================================================================
 
 -- Sample Data
 
@@ -81,6 +83,7 @@ CREATE TABLE IF NOT EXISTS music_jobs (
 --   }'::jsonb
 -- );
 
+-- ============================================================================
 
 -- Verification Queries
 
@@ -99,6 +102,8 @@ CREATE TABLE IF NOT EXISTS music_jobs (
 (3 rows)
 
 */
+
+-- ============================================================================
 
 -- 2. Extract filename and mime_type from each job
 
@@ -119,6 +124,8 @@ CREATE TABLE IF NOT EXISTS music_jobs (
 
 */
 
+-- ============================================================================
+
 -- 3. Find only MP3 uploads
 
 -- SELECT * FROM music_jobs
@@ -134,6 +141,8 @@ CREATE TABLE IF NOT EXISTS music_jobs (
 
 */
 
+-- ============================================================================
+
 -- 4. Find the job that has the extra field
 
 -- SELECT * FROM music_jobs
@@ -147,3 +156,5 @@ CREATE TABLE IF NOT EXISTS music_jobs (
 (1 row)
 
 */
+
+-- ============================================================================
