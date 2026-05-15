@@ -1,5 +1,8 @@
 # postgres-music-queue
 
+### Video Link
+<a href="https://drive.google.com/file/d/1xBVUS6lmszG0LLyPxtBb8EI1RVozx7xg/view?usp=sharing" target="_blank">Test 2 Video Submission</a>
+
 ### Database Setup
 
 1. Create database:
