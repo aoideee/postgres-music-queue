@@ -328,12 +328,12 @@ ADD COLUMN progress INTEGER NOT NULL DEFAULT 0
 -- SET status = 'done', progress = 100
 -- WHERE status = 'processing';
 
--- -- Invalid status (copy its error message)
+-- -- Invalid status
 -- UPDATE music_jobs
 -- SET status = 'complet'
 -- WHERE id = (SELECT id FROM music_jobs ORDER BY created_at LIMIT 1);
 
--- -- Invalid progress (copy its error message)
+-- -- Invalid progress
 -- UPDATE music_jobs
 -- SET progress = 150
 -- WHERE id = (SELECT id FROM music_jobs ORDER BY created_at LIMIT 1);
@@ -634,8 +634,6 @@ public_id               | status | progress |                                   
 
 ALTER TABLE music_jobs
 ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
-
--- Make it consistent: set updated_at = created_at for existing rows
 UPDATE music_jobs SET updated_at = created_at;
 
 -- ============================================================================
