@@ -783,3 +783,140 @@ UPDATE music_jobs SET updated_at = created_at;
  97b71d7a-f67b-426d-9ff9-0087c2aa2091 | done   | 2026-05-14 21:25:58.898295-06 | 2026-05-14 21:27:15.69243-06  | 00:01:16.794135
 
 */
+
+
+-- ============================================================================
+
+-- Step 6 — Trigger on updated_at
+
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER music_jobs_updated_at
+BEFORE UPDATE ON music_jobs
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- ============================================================================
+
+-- Questions & Answers
+
+-- 1. Why BEFORE UPDATE and not AFTER UPDATE?
+-- ANSWER: BEFORE triggers operate on the NEW row *before* it's written. AFTER triggers operate 
+--         on the *already written* row, so you can't modify it.
+
+-- 2. What is NEW and what is OLD in a trigger function?
+-- ANSWER: NEW refers to the row *after* the update. OLD refers to the row *before* the update.
+
+-- 3. Why does returning NEW matter?
+-- ANSWER: If you modify NEW (like setting NEW.updated_at = now()), returning NEW ensures 
+--         those changes are saved back into the row. Without it, the trigger would run but 
+--         its changes would be discarded.
+
+-- 4. Why is the function reusable across tables?
+-- ANSWER: Because it doesn't depend on any specific column names other than updated_at.
+
+-- ============================================================================
+
+-- Sample Data
+
+-- -- Update progress WITHOUT mentioning updated_at — trigger fires automatically
+-- UPDATE music_jobs
+-- SET progress = 55
+-- WHERE id = (
+--   SELECT id FROM music_jobs ORDER BY created_at ASC LIMIT 1
+-- );
+
+-- SELECT id, progress, updated_at FROM music_jobs
+-- WHERE id = (SELECT id FROM music_jobs ORDER BY created_at ASC LIMIT 1);
+-- -- updated_at should now reflect the current time, even though we never set it
+
+-- -- Try to sabotage it — set updated_at = '2000-01-01'
+-- UPDATE music_jobs
+-- SET progress = 60,
+--     updated_at = '2000-01-01'
+-- WHERE id = (
+--   SELECT id FROM music_jobs ORDER BY created_at ASC LIMIT 1
+-- );
+
+-- SELECT id, progress, updated_at FROM music_jobs
+-- WHERE id = (SELECT id FROM music_jobs ORDER BY created_at ASC LIMIT 1);
+-- -- updated_at will still be now() — the trigger overwrote '2000-01-01'
+
+-- ============================================================================
+
+-- Sample Data Results
+
+-- Update progress WITHOUT mentioning updated_at — trigger fires automatically
+
+/*
+
+---------------------------------------------------------------------------------
+                  id                  | progress |          updated_at           
+--------------------------------------+----------+-------------------------------
+ 019e29c1-6c7d-7cac-a938-0da189d3fddd |       55 | 2026-05-14 21:51:37.919729-06
+
+
+*/
+
+
+-- Try to sabotage it — set updated_at = '2000-01-01'
+
+/*
+
+---------------------------------------------------------------------------------
+                  id                  | progress |          updated_at           
+--------------------------------------+----------+-------------------------------
+ 019e29c1-6c7d-7cac-a938-0da189d3fddd |       60 | 2026-05-14 21:53:09.388063-06
+
+
+*/
+
+-- ============================================================================
+
+-- Verification Queries
+
+-- 1. Show trigger details from information_schema.triggers
+
+-- SELECT trigger_name, event_manipulation, event_object_table,
+--        action_timing, action_orientation
+-- FROM information_schema.triggers
+-- WHERE trigger_schema = 'public';
+
+/*
+
+------------------------------------------------------------------------------------------------------
+     trigger_name      | event_manipulation | event_object_table | action_timing | action_orientation 
+-----------------------+--------------------+--------------------+---------------+--------------------
+ music_jobs_updated_at | UPDATE             | music_jobs         | BEFORE        | ROW
+
+*/
+
+-- ============================================================================
+
+
+-- 2. Show function details from information_schema.routines
+
+-- SELECT routine_name, routine_type, data_type, routine_definition
+-- FROM information_schema.routines
+-- WHERE routine_schema = 'public'
+--   AND routine_name = 'set_updated_at';
+
+/*
+
+-------------------------------------------------------------------------
+  routine_name  | routine_type | data_type |     routine_definition      
+----------------+--------------+-----------+-----------------------------
+ set_updated_at | FUNCTION     | trigger   |                            +
+                |              |           | BEGIN                      +
+                |              |           |     NEW.updated_at = now();+
+                |              |           |     RETURN NEW;            +
+                |              |           | END;                       +
+                |              |           | 
+
+*/
