@@ -403,3 +403,223 @@ ADD COLUMN progress INTEGER NOT NULL DEFAULT 0
 */
 
 
+-- ============================================================================
+
+-- Step 4 — result, error_msg
+
+ALTER TABLE music_jobs
+ADD COLUMN result    JSONB NOT NULL DEFAULT '{}',
+ADD COLUMN error_msg TEXT;
+
+-- ============================================================================
+
+-- Questions and Answers
+
+--  1. Why does the result default to '{}' and not NULL?
+-- ANSWER: It defaults to an empty JSON object so that the application code doesn't
+--         have to handle NULL values when parsing the result.
+
+-- 2. Why is error_msg TEXT and not inside the result JSONB?
+-- ANSWER: To ensure data integrity at the database level, preventing invalid data from
+--         being inserted into the table, even if the application code is buggy.
+
+-- 3. What does the || operator do to a JSONB object?
+-- ANSWER: It merges two JSONB objects, with the right-hand side overriding the left-hand side in case of duplicate keys.
+
+-- 4. Why does each stage read from the original file, not the previous stage's output?
+-- ANSWER: It avoids storing intermediate files, reducing disk usage and potential
+--          corruption if a job is retried.
+
+-- ============================================================================
+
+-- Sample Data
+
+-- -- First, claim a pending job to work on
+-- UPDATE music_jobs
+-- SET status = 'processing'
+-- WHERE id = (
+--   SELECT id FROM music_jobs
+--   WHERE status = 'pending'
+--   ORDER BY created_at ASC
+--   LIMIT 1
+-- );
+
+-- -- Stage 1 — normalize complete (25%)
+-- UPDATE music_jobs
+-- SET progress = 25,
+--     result = result || '{"normalize": "complete", "lufs": -14.2}'::jsonb
+-- WHERE status = 'processing';
+
+-- SELECT id, status, progress, result FROM music_jobs WHERE status = 'processing';
+
+-- -- Stage 2 — trim silence complete (50%)
+-- UPDATE music_jobs
+-- SET progress = 50,
+--     result = result || '{"trim_silence": "complete", "trimmed_ms": 320}'::jsonb
+-- WHERE status = 'processing';
+
+-- SELECT id, status, progress, result FROM music_jobs WHERE status = 'processing';
+
+-- -- Stage 3 — convert complete (75%)
+-- UPDATE music_jobs
+-- SET progress = 75,
+--     result = result || '{"convert": "complete", "output_format": "mp3", "bitrate_kbps": 320}'::jsonb
+-- WHERE status = 'processing';
+
+-- SELECT id, status, progress, result FROM music_jobs WHERE status = 'processing';
+
+-- -- Stage 4 — waveform complete, job done (100%)
+-- UPDATE music_jobs
+-- SET status = 'done',
+--     progress = 100,
+--     result = result || '{"waveform": "complete", "peaks": [0.2, 0.8, 0.5, 0.9, 0.3], "output_url": "s3://music-queue/processed.mp3"}'::jsonb
+-- WHERE status = 'processing';
+
+-- SELECT id, status, progress, result FROM music_jobs WHERE status = 'done' ORDER BY created_at DESC LIMIT 1;
+
+-- -- Simulate failure on a different job
+-- UPDATE music_jobs
+-- SET status = 'failed',
+--     error_msg = 'codec not found: unable to decode wav header, file may be corrupt'
+-- WHERE id = (
+--   SELECT id FROM music_jobs
+--   WHERE status = 'pending'
+--   ORDER BY created_at ASC
+--   LIMIT 1
+-- );
+
+-- SELECT id, status, error_msg FROM music_jobs WHERE status = 'failed';
+
+
+-- Sample Data Results:
+
+-- Stage 1 — normalize complete (25%)
+
+/*
+
+---------------------------------------------------------------------------------------------------------
+                  id                  |   status   | progress |                  result                  
+--------------------------------------+------------+----------+------------------------------------------
+ 019e2982-afe0-719f-afd6-9d0ca0700f5f | processing |       25 | {"lufs": -14.2, "normalize": "complete"}
+
+*/
+
+
+-- Stage 2 — trim silence complete (50%)
+
+/*
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+                  id                  |   status   | progress |                                         result                                          
+--------------------------------------+------------+----------+-----------------------------------------------------------------------------------------
+ 019e2982-afe0-719f-afd6-9d0ca0700f5f | processing |       50 | {"lufs": -14.2, "normalize": "complete", "trimmed_ms": 320, "trim_silence": "complete"}
+
+*/
+
+
+-- Stage 3 — convert complete (75%)
+
+/*
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                  id                  |   status   | progress |                                                    result                                                     
+--------------------------------------+------------+----------+---------------------------------------------------------------------------------------------------------------
+ 019e2982-afe0-719f-afd6-9d0ca0700f5f | processing |       75 | {"lufs": -14.2, "convert": "complete", "normalize": "complete", "trimmed_ms": 320, "bitrate_kbps": 320, ...}
+
+*/
+
+
+-- Stage 4 — waveform complete, job done (100%)
+
+/*
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                  id                  | status | progress |                                                                                               result                                                                                               
+--------------------------------------+--------+----------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 019e2982-afe0-719f-afd6-9d0ca0700f5f | done   |      100 | {"lufs": -14.2, "peaks": [0.2, 0.8, 0.5, 0.9, 0.3], "convert": "complete", "waveform": "complete", "normalize": "complete", "output_url": "s3://music-queue/processed.mp3", "trimmed_ms": 320, ...}
+
+*/
+
+
+-- Simulate failure on a different job
+
+/*
+
+-------------------------------------------------------------------------------------------------------------------
+                  id                  | status |                             error_msg                             
+--------------------------------------+--------+-------------------------------------------------------------------
+ 019e2982-afe2-7746-a23d-c4e006c05f39 | failed | codec not found: unable to decode wav header, file may be corrupt
+
+*/
+
+-- ============================================================================
+
+-- Verification Queries
+
+--  1. What does the client see when polling a completed job?
+
+-- SELECT public_id, status, progress, result
+-- FROM music_jobs
+-- WHERE status = 'done';
+
+/*
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+public_id               | status | progress |                                                                                               result                                                                                               
+--------------------------------------+--------+----------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 78c48301-5db9-46d0-998d-6a7e4d9d1ad1 | done   |      100 | {}
+ 8e884845-603f-4ab1-97b1-920746996897 | done   |      100 | {"lufs": -14.2, "peaks": [0.2, 0.8, 0.5, 0.9, 0.3], "convert": "complete", "waveform": "complete", "normalize": "complete", "output_url": "s3://music-queue/processed.mp3", ...}
+
+*/
+
+-- ============================================================================
+
+-- 2. What does the client see mid-processing (partial result)?
+
+-- SELECT public_id, status, progress, result
+-- FROM music_jobs
+-- WHERE status = 'processing';
+
+/*
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+              public_id               |   status   | progress |                                         result                                          
+--------------------------------------+------------+----------+-----------------------------------------------------------------------------------------
+ 3bd510de-bccd-40a2-b7eb-a23f75ce3216 | processing |       50 | {"lufs": -14.2, "normalize": "complete", "trimmed_ms": 320, "trim_silence": "complete"}
+
+*/
+
+-- ============================================================================
+
+-- 3. How do you find all failed jobs?
+
+-- SELECT id, public_id, error_msg
+-- FROM music_jobs
+-- WHERE status = 'failed';
+
+/*
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+                  id                  |              public_id               |                             error_msg                             
+--------------------------------------+--------------------------------------+-------------------------------------------------------------------
+ 019e2998-4a39-798d-9653-cd8bc8de04f0 | 497e30fc-5338-4083-8da4-622d10fc05f1 | codec not found: unable to decode wav header, file may be corrupt
+
+*/
+
+-- ============================================================================
+
+-- 4. Show the full result object for a completed job
+
+-- SELECT public_id, result
+-- FROM music_jobs
+-- WHERE status = 'done';
+
+/*
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+              public_id               |                                                                                               result                                                                                               
+--------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 508aae29-e3ee-4580-966d-9c163ddd53fa | {}
+ 3bd510de-bccd-40a2-b7eb-a23f75ce3216 | {"lufs": -14.2, "peaks": [0.2, 0.8, 0.5, 0.9, 0.3], "convert": "complete", "waveform": "complete", "normalize": "complete", "output_url": "s3://music-queue/processed.mp3", ...}
+
+*/
