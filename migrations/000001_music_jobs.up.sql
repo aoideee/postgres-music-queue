@@ -490,6 +490,7 @@ ADD COLUMN error_msg TEXT;
 
 -- SELECT id, status, error_msg FROM music_jobs WHERE status = 'failed';
 
+-- ============================================================================
 
 -- Sample Data Results:
 
@@ -621,5 +622,164 @@ public_id               | status | progress |                                   
 --------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  508aae29-e3ee-4580-966d-9c163ddd53fa | {}
  3bd510de-bccd-40a2-b7eb-a23f75ce3216 | {"lufs": -14.2, "peaks": [0.2, 0.8, 0.5, 0.9, 0.3], "convert": "complete", "waveform": "complete", "normalize": "complete", "output_url": "s3://music-queue/processed.mp3", ...}
+
+*/
+
+
+-- ============================================================================
+
+-- Step 5 — updated_at
+
+ALTER TABLE music_jobs
+ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- Make it consistent: set updated_at = created_at for existing rows
+UPDATE music_jobs SET updated_at = created_at;
+
+-- ============================================================================
+
+-- Questions & Answers
+
+-- 1. Why is created_at not enough?
+-- ANSWER: It only tells you when the job was created. It doesn't tell you when it was last updated.
+
+-- 2. What goes wrong if application code maintains updated_at?
+-- ANSWER: The database doesn't know when the job was last updated. So it doesn't know if the job is still being processed or not.
+
+-- 3. Write a query that would power an SSE health check endpoint
+-- ANSWER: SELECT * FROM music_jobs WHERE status != 'done';
+
+-- ============================================================================
+
+-- Sample Data
+
+-- -- Update progress WITHOUT setting updated_at — updated_at will be stale
+-- UPDATE music_jobs
+-- SET progress = 10
+-- WHERE id = (
+--   SELECT id FROM music_jobs
+--   WHERE status = 'pending'
+--   ORDER BY created_at ASC
+--   LIMIT 1
+-- );
+
+-- SELECT id, progress, created_at, updated_at FROM music_jobs
+-- WHERE id = (
+--   SELECT id FROM music_jobs ORDER BY created_at ASC LIMIT 1
+-- );
+
+-- -- Update the same job WITH updated_at = now() — now it is correct
+-- UPDATE music_jobs
+-- SET progress = 20,
+--     updated_at = now()
+-- WHERE id = (
+--   SELECT id FROM music_jobs
+--   ORDER BY created_at ASC
+--   LIMIT 1
+-- );
+
+-- SELECT id, progress, created_at, updated_at FROM music_jobs
+-- WHERE id = (
+--   SELECT id FROM music_jobs ORDER BY created_at ASC LIMIT 1
+-- );
+
+-- -- Why this is fragile:
+-- -- Every developer must remember to manually set updated_at = now() on every
+-- -- UPDATE. If even one UPDATE forgets it, updated_at silently lies. There is
+-- -- nothing stopping a buggy worker from updating progress and leaving updated_at
+-- -- stale — the database will not catch it. A trigger solves this automatically.
+
+-- ============================================================================
+
+-- Sample Data Results:
+
+-- Update progress WITHOUT setting updated_at — updated_at will be stale
+
+/*
+
+-----------------------------------------------------------------------------------------------------------------
+                  id                  | progress |          created_at           |          updated_at           
+--------------------------------------+----------+-------------------------------+-------------------------------
+ 019e29ab-64f2-7c5a-a606-2302f89976a9 |      100 | 2026-05-14 21:25:58.898295-06 | 2026-05-14 21:25:58.898295-06
+
+
+*/
+
+
+
+-- Update the same job WITH updated_at = now() — now it is correct
+
+/*
+
+----------------------------------------------------------------------------------------------------------------
+                  id                  | progress |          created_at           |          updated_at          
+--------------------------------------+----------+-------------------------------+------------------------------
+ 019e29ab-64f2-7c5a-a606-2302f89976a9 |       20 | 2026-05-14 21:25:58.898295-06 | 2026-05-14 21:27:15.69243-06
+
+*/
+
+
+-- Why this is fragile:
+-- Every developer must remember to manually set updated_at = now() on every
+-- UPDATE. If even one UPDATE forgets it, updated_at silently lies. There is
+-- nothing stopping a buggy worker from updating progress and leaving updated_at
+-- stale — the database will not catch it. A trigger solves this automatically.
+
+-- ============================================================================
+
+
+-- Verification Queries
+
+-- 1. Find jobs that changed in the last 60 seconds
+
+-- SELECT id, status, progress, updated_at
+-- FROM music_jobs
+-- WHERE updated_at >= now() - INTERVAL '60 seconds';
+
+/*
+
+-------------------------------------
+ id | status | progress | updated_at 
+----+--------+----------+------------
+
+*/
+
+-- ============================================================================
+
+-- 2. Find jobs stuck in processing for more than 5 minutes
+
+-- SELECT id, status, progress, updated_at
+-- FROM music_jobs
+-- WHERE status = 'processing'
+--   AND updated_at < now() - INTERVAL '5 minutes';
+
+/*
+
+-------------------------------------
+ id | status | progress | updated_at 
+----+--------+----------+------------
+
+*/
+
+-- ============================================================================
+
+-- 3. How long did each completed job take?
+
+-- SELECT
+--   public_id,
+--   status,
+--   created_at,
+--   updated_at,
+--   updated_at - created_at AS duration
+-- FROM music_jobs
+-- WHERE status = 'done';
+
+/*
+
+---------------------------------------------------------------------------------------------------------------------------------
+              public_id               | status |          created_at           |          updated_at           |    duration     
+--------------------------------------+--------+-------------------------------+-------------------------------+-----------------
+ ba7dd3b3-be49-49c0-a810-4e10efa3dbee | done   | 2026-05-14 21:25:58.901502-06 | 2026-05-14 21:25:58.901502-06 | 00:00:00
+ 97b71d7a-f67b-426d-9ff9-0087c2aa2091 | done   | 2026-05-14 21:25:58.898295-06 | 2026-05-14 21:27:15.69243-06  | 00:01:16.794135
 
 */
