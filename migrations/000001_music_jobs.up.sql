@@ -8,7 +8,7 @@
 CREATE TABLE IF NOT EXISTS music_jobs (
     id         UUID        PRIMARY KEY DEFAULT uuidv7(),
     payload    JSONB       NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ============================================================================
