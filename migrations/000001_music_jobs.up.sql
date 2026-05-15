@@ -16,37 +16,29 @@ CREATE TABLE IF NOT EXISTS music_jobs (
 -- Questions & Answers
 
 -- 1. Why UUID over SERIAL for the primary key?
--- ANSWER: UUID is used over SERIAL due to it being more scalable and secure.
---         For instance, if this were a project that required more than one database
---         to store the music jobs table, using SERIAL wouldn't be as ideal due to the fact that
---         it relies on a central authority (in this case, our database) to determine what the next
---         unique ID would be. And if there are multiple databases at play, it can easily lead to duplication of IDs.
---         While with UUID, even if we had multiple databases, the chance of duplication of IDs is extremely low,
---         due it being able to be generated anywhere without needing the database to do it, which makes it more
---         scalable.
-
---         In regards to security, SERIAL is predicatble. If an attacker knows how many
---         rows are in the table, they can easily guess what the next ID will be, and potentially
---         use it to perform malicious activities. UUID on the other hand is not predicatble, and
---         it is extremely unlikely that two people will generate the same UUID, making it more
---         secure and harder to exploit.
+-- ANSWER: SERIAL is a sequence. The database hands out IDs one at a time, in order. That's fine
+--         for a single database, but if you ever scale out, you'd get duplicate IDs across instances.
+--         UUID can be generated anywhere without coordination, so duplication isn't a concern.
+--         Security-wise, SERIAL IDs are predictable (1, 2, 3...). An attacker can easily guess
+--         other valid IDs. UUIDs aren't guessable.
 
 -- 2. Why uuidv7() specifically over uuidv4()?
--- ANSWER: uuidv7() is used specifically because it is time-ordered. Unlike uuidv4(), which is entirely random,
---         uuidv7() embeds a timestamp at the beginning of the ID. This is critical for B-tree performance because
---         it allows PostgreSQL to insert new records sequentially. This prevents index fragmentation and ensures that
---         write speeds remain fast even as the music_jobs table grows, whereas uuidv4() would cause random disk I/O and slow down insertions.
+-- ANSWER: uuidv7() embeds a millisecond timestamp in its high bits, so IDs sort in the order they
+--         were created. That matters for B-tree indexes because it keeps sequential inserts compact
+--         and writes fast. uuidv4() is completely random, so every new row lands in a random spot
+--         in the index, causing fragmentation and slower writes over time.
 
 -- 3. Why JSONB over JSON?
--- ANSWER: While both allow for flexible data, JSONB stores data in a binary format rather than as a simple text string.
---         This makes JSONB slightly slower to insert but much faster to query and process since it doesn't require re-parsing.
+-- ANSWER: JSON is stored as raw text and re-parsed on every read. JSONB parses the data once at
+--         insert time and stores it in binary, so queries are significantly faster. The tradeoff is
+--         inserts are slightly slower, but for a job queue that's read far more than it's written,
+--         JSONB is the better choice.
 
 -- 4. Why TIMESTAMPTZ over TIMESTAMP?
--- ANSWER: TIMESTAMPTZ is used because it stores the time in UTC and converts it to the client's local time upon retrieval.
---         This eliminates ambiguity related to time zones and ensures that everyone sees the same time regardless of their location.
---         TIMESTAMP does not store any timezone information. When inserting a timestamp without a timezone, PostgreSQL 
---         stores it exactly as provided. When retrieving it, it returns the same value without any conversion. 
---         This can lead to confusion if the database is accessed from different time zones.
+-- ANSWER: TIMESTAMP stores time as-is with no timezone info. If the server is in UTC and a client
+--         is in CST, you'd get confusing results with no way to convert. TIMESTAMPTZ stores
+--         everything in UTC internally and converts to the session timezone on retrieval, so
+--         everyone sees the correct time regardless of where they are.
 
 -- ============================================================================
 
@@ -168,23 +160,25 @@ ADD COLUMN public_id UUID NOT NULL UNIQUE DEFAULT uuidv4();
 -- Questions and Answers
 
 -- 1. Why does this column use uuidv4() and not uuidv7()?
--- ANSWER: uuidv4() is used because it is a random identifier that is not time-ordered.
---         This ensures that the public_id is unique and cannot be predicted. This is useful 
---         for security reasons, as it prevents attackers from guessing the public_id and 
---         accessing the job.
+-- ANSWER: public_id is what gets sent to clients. It shows up in API responses and URLs.
+--         uuidv7() embeds a timestamp that anyone can extract with uuid_extract_timestamp(),
+--         which would leak when the job was created. uuidv4() is completely random, so there's
+--         nothing to extract from it. No metadata, no timing info.
 
 -- 2. What does uuid_extract_timestamp() reveal about uuidv7?
--- ANSWER: It reveals the exact date and millisecond that the ID was generated. It proves that
---         that uuidv7 are not randomly generated and that they can be used to determine when the job
---         was created.
+-- ANSWER: It returns the exact millisecond the ID was generated. Running it on id gives you
+--         a real timestamp. Running it on public_id returns NULL because uuidv4 has no embedded
+--         timestamp — it's just random bytes. That NULL result is the whole point.
 
 -- 3. Why does the UNIQUE constraint make CREATE INDEX unnecessary?
--- ANSWER: The UNIQUE constraint creates an index automatically, so CREATE INDEX is not needed.
+-- ANSWER: PostgreSQL automatically creates a B-tree index to enforce every UNIQUE constraint.
+--         Adding CREATE INDEX on top of it would just create a duplicate index, wasting storage.
 
 -- 4. What is the two-ID pattern and why does it matter?
--- ANSWER: The two-ID pattern is when you have two primary keys for a table, one is the 
---         internal ID and the other is the public ID. It matters because it allows for 
---         easy querying and retrieval of data without exposing the internal ID.
+-- ANSWER: The table has two identifiers: id (internal, uuidv7) and public_id (external, uuidv4).
+--         id is optimized for database performance because it's time-ordered for fast B-tree inserts.
+--         public_id is what gets exposed to clients because it's random, non-guessable, and reveals nothing
+--         about the internals. This way we never hand our primary key to the outside world.
 
 -- ============================================================================
 
@@ -278,28 +272,30 @@ ADD COLUMN progress INTEGER NOT NULL DEFAULT 0
 -- Questions and Answers
 
 -- 1. Why are status and progress real columns, not inside payload JSONB?
--- ANSWER: They are real columns because they are frequently queried by the Go server to
---         determine the status of the job, and adding indexes to real columns is more
---         efficient than querying JSONB.
+-- ANSWER: The worker and client query these fields constantly. If they were inside payload,
+--         every query would need payload->>'status', which can't use a regular index the same
+--         way. Real columns are indexable, type-safe, and have constraints because JSONB fields aren't.
 
 -- 2. What happens if a buggy worker writes status = 'complet'?
--- ANSWER: It would be rejected with an error message stating that the value violates the
---         CHECK constraint.
+-- ANSWER: PostgreSQL rejects the write with a check constraint violation error. The row never
+--         makes it into the table, not even partially.
 
 -- 3. Why does the CHECK constraint matter more than application validation?
--- ANSWER: It ensures data integrity at the database level, preventing invalid data from 
---         being inserted into the table, even if the application code is buggy.
+-- ANSWER: Application validation can be bypassed by a buggy worker, a direct psql edit, a future
+--         developer who doesn't know the rules. The CHECK constraint is enforced by the database
+--         itself, so no matter how the data gets written, it has to pass. The database is the
+--         last line of defense.
 
 -- 4. Draw the state machine for a job lifecycle
--- ANSWER: 
+-- ANSWER:
 
 /*
 
   pending
     ↓
   processing
-    ↓
-  done
+    ↓         ↘
+  done       failed
 
 */
 
@@ -416,19 +412,25 @@ ADD COLUMN error_msg TEXT;
 -- Questions and Answers
 
 --  1. Why does the result default to '{}' and not NULL?
--- ANSWER: It defaults to an empty JSON object so that the application code doesn't
---         have to handle NULL values when parsing the result.
+-- ANSWER: An empty object '{}' is safe to merge with || and serializes cleanly to JSON in
+--         the application. NULL would require null checks everywhere before doing anything
+--         with the result field, which is easy to forget and leads to runtime errors.
 
 -- 2. Why is error_msg TEXT and not inside the result JSONB?
--- ANSWER: To ensure data integrity at the database level, preventing invalid data from
---         being inserted into the table, even if the application code is buggy.
+-- ANSWER: error_msg needs to be NULL when there's no error. That NULL is a meaningful signal.
+--         If it lived inside result JSONB, you'd have to check result->>'error_msg' IS NULL,
+--         which is less clear and can't use a standard index. A separate TEXT column is directly
+--         queryable, filterable, and its NULL state is unambiguous.
 
 -- 3. What does the || operator do to a JSONB object?
--- ANSWER: It merges two JSONB objects, with the right-hand side overriding the left-hand side in case of duplicate keys.
+-- ANSWER: It merges two JSONB objects into one. If both sides have the same key, the
+--         right-hand side wins. That's how each stage appends its output without overwriting
+--         what the previous stages already stored.
 
 -- 4. Why does each stage read from the original file, not the previous stage's output?
--- ANSWER: It avoids storing intermediate files, reducing disk usage and potential
---          corruption if a job is retried.
+-- ANSWER: It makes each stage idempotent because if the job is retried, it doesn't need the previous
+--         stage's output to already exist. It also avoids storing intermediate files that would
+--         need cleanup if something fails halfway through.
 
 -- ============================================================================
 
@@ -641,13 +643,21 @@ UPDATE music_jobs SET updated_at = created_at;
 -- Questions & Answers
 
 -- 1. Why is created_at not enough?
--- ANSWER: It only tells you when the job was created. It doesn't tell you when it was last updated.
+-- ANSWER: created_at never changes because it only tells you when the job was created. You can't
+--         use it to detect stuck jobs, recent activity, or whether a job is making progress.
+--         You need a column that actually updates when the row changes.
 
 -- 2. What goes wrong if application code maintains updated_at?
--- ANSWER: The database doesn't know when the job was last updated. So it doesn't know if the job is still being processed or not.
+-- ANSWER: If even one UPDATE forgets to include updated_at = now(), the column silently shows
+--         the wrong time. The database has no way to enforce it, it just stores whatever you
+--         give it. A trigger removes that risk by handling it automatically.
 
 -- 3. Write a query that would power an SSE health check endpoint
--- ANSWER: SELECT * FROM music_jobs WHERE status != 'done';
+-- ANSWER: SELECT * FROM music_jobs
+--         WHERE updated_at >= now() - INTERVAL '5 seconds'
+--         ORDER BY updated_at DESC;
+--         The SSE endpoint would run this on a short interval and push any changed rows to
+--         connected clients, so they see updates in near real-time without long-polling.
 
 -- ============================================================================
 
@@ -807,19 +817,25 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 -- Questions & Answers
 
 -- 1. Why BEFORE UPDATE and not AFTER UPDATE?
--- ANSWER: BEFORE triggers operate on the NEW row *before* it's written. AFTER triggers operate 
---         on the *already written* row, so you can't modify it.
+-- ANSWER: BEFORE triggers let you modify the NEW row before it's written to disk. AFTER triggers
+--         fire after the write is already done, so the row is saved and you can't change it.
+--         Since we need to set updated_at on the row being updated, BEFORE is the only option.
 
 -- 2. What is NEW and what is OLD in a trigger function?
--- ANSWER: NEW refers to the row *after* the update. OLD refers to the row *before* the update.
+-- ANSWER: NEW is the row as it will look after the update — the version we're about to save.
+--         OLD is what the row looked like before the update. We modify NEW.updated_at so the
+--         new timestamp gets written when the row is saved.
 
 -- 3. Why does returning NEW matter?
--- ANSWER: If you modify NEW (like setting NEW.updated_at = now()), returning NEW ensures 
---         those changes are saved back into the row. Without it, the trigger would run but 
---         its changes would be discarded.
+-- ANSWER: BEFORE row-level triggers must return the row they want PostgreSQL to save.
+--         If we return NULL, the update gets cancelled entirely. If we return NEW without
+--         our changes, those changes are lost. Returning the modified NEW is what makes
+--         the trigger's work actually stick.
 
 -- 4. Why is the function reusable across tables?
--- ANSWER: Because it doesn't depend on any specific column names other than updated_at.
+-- ANSWER: The function only references NEW.updated_at because it has no table names or other columns.
+--         As long as a table has an updated_at column, you can attach this trigger to it
+--         and it'll just work.
 
 -- ============================================================================
 
